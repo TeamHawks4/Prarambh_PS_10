@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Users, Copy, ExternalLink } from "lucide-react";
+import { Plus, Users, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 import { useNavigate } from "react-router-dom";
@@ -26,14 +26,13 @@ export default function Groups() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [joinCode, setJoinCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isFetching, setIsFetching] = useState(true);
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  // Fetch groups and set up real-time subscription
   useEffect(() => {
     fetchGroups();
     
-    // Set up real-time subscription for groups
     const subscription = supabase
       .channel('groups_changes')
       .on(
@@ -49,7 +48,6 @@ export default function Groups() {
       )
       .subscribe();
 
-    // Set up real-time subscription for group members
     const membersSubscription = supabase
       .channel('group_members_changes')
       .on(
@@ -73,73 +71,31 @@ export default function Groups() {
 
   const fetchGroups = async () => {
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      if (!userData.user) return;
-
-      // Get user's group memberships first
-      const { data: memberships, error: membersError } = await supabase
-        .from('group_members')
-        .select('group_id')
-        .eq('user_id', userData.user.id);
-
-      if (membersError) throw membersError;
-
-      if (!memberships || memberships.length === 0) {
+      setIsFetching(true);
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError) throw userError;
+      if (!user) {
         setGroups([]);
         return;
       }
 
-      const groupIds = memberships.map(m => m.group_id);
+      // Call the RPC function to get all group data in one go
+      const { data: groupsData, error } = await supabase.rpc('get_user_groups_with_details');
 
-      // Get basic group info
-      const { data: groupsData, error: groupsError } = await supabase
-        .from('groups')
-        .select('*')
-        .in('id', groupIds);
+      if (error) throw error;
 
-      if (groupsError) throw groupsError;
-
-      // For each group, fetch member count and total expenses
-      const groupsWithDetails = await Promise.all(
-        groupsData.map(async (group) => {
-          // Get member count
-          const { count: memberCount, error: countError } = await supabase
-            .from('group_members')
-            .select('*', { count: 'exact', head: true })
-            .eq('group_id', group.id);
-
-          if (countError) console.error('Error fetching member count:', countError);
-
-          // Get total expenses
-          const { data: expenses, error: expensesError } = await supabase
-            .from('expenses')
-            .select('amount')
-            .eq('group_id', group.id);
-
-          if (expensesError) console.error('Error fetching expenses:', expensesError);
-
-          const totalExpenses = expenses?.reduce((sum, expense) => sum + (expense.amount || 0), 0) || 0;
-
-          return {
-            id: group.id,
-            name: group.name,
-            description: group.description,
-            code: group.code,
-            created_by: group.created_by,
-            created_at: group.created_at,
-            members: memberCount || 1,
-            total_expenses: totalExpenses
-          };
-        })
-      );
-
-      setGroups(groupsWithDetails);
+      // The data is already in the correct shape
+      setGroups(groupsData || []);
     } catch (error: any) {
+      console.error("Error in fetchGroups:", error);
       toast({
         title: "Error fetching groups",
         description: error.message,
         variant: "destructive",
       });
+    } finally {
+      setIsFetching(false);
     }
   };
 
@@ -156,8 +112,10 @@ export default function Groups() {
     const description = formData.get("group-description") as string;
 
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      if (!userData.user) throw new Error("User not authenticated");
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError) throw userError;
+      if (!user) throw new Error("User not authenticated");
 
       // Create group with unique code
       const groupCode = generateGroupCode();
@@ -165,10 +123,10 @@ export default function Groups() {
         .from('groups')
         .insert([
           {
-            name,
-            description,
+            name: name.trim(),
+            description: description.trim() || null,
             code: groupCode,
-            created_by: userData.user.id,
+            created_by: user.id,
           }
         ])
         .select()
@@ -176,13 +134,13 @@ export default function Groups() {
 
       if (groupError) throw groupError;
 
-      // Add creator as a member
+      // Add creator as a member with admin role
       const { error: memberError } = await supabase
         .from('group_members')
         .insert([
           {
             group_id: group.id,
-            user_id: userData.user.id,
+            user_id: user.id,
             role: 'admin'
           }
         ]);
@@ -191,13 +149,14 @@ export default function Groups() {
 
       toast({
         title: "Group Created",
-        description: "Your new group has been created successfully!",
+        description: `"${group.name}" has been created successfully!`,
       });
       setIsCreateOpen(false);
       
       // Reset form
       (e.target as HTMLFormElement).reset();
     } catch (error: any) {
+      console.error("Error creating group:", error);
       toast({
         title: "Error creating group",
         description: error.message,
@@ -221,31 +180,23 @@ export default function Groups() {
     setIsLoading(true);
 
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      if (!userData.user) throw new Error("User not authenticated");
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError) throw userError;
+      if (!user) throw new Error("User not authenticated");
 
       // Find group by code
       const { data: group, error: groupError } = await supabase
         .from('groups')
         .select('*')
-        .eq('code', joinCode.toUpperCase())
+        .eq('code', joinCode.toUpperCase().trim())
         .single();
 
-      if (groupError) throw groupError;
-      if (!group) {
-        throw new Error("Group not found");
-      }
-
-      // Check if user is already a member
-      const { data: existingMember } = await supabase
-        .from('group_members')
-        .select('*')
-        .eq('group_id', group.id)
-        .eq('user_id', userData.user.id)
-        .single();
-
-      if (existingMember) {
-        throw new Error("You are already a member of this group");
+      if (groupError) {
+        if (groupError.code === 'PGRST116') {
+          throw new Error("Group not found. Please check the code and try again.");
+        }
+        throw groupError;
       }
 
       // Add user as member
@@ -254,7 +205,7 @@ export default function Groups() {
         .insert([
           {
             group_id: group.id,
-            user_id: userData.user.id,
+            user_id: user.id,
             role: 'member'
           }
         ]);
@@ -262,12 +213,13 @@ export default function Groups() {
       if (memberError) throw memberError;
 
       toast({
-        title: "Success",
-        description: `You've joined ${group.name}!`,
+        title: "Success!",
+        description: `You've joined "${group.name}"!`,
       });
       
       setJoinCode("");
     } catch (error: any) {
+      console.error("Error joining group:", error);
       toast({
         title: "Error joining group",
         description: error.message,
@@ -289,6 +241,19 @@ export default function Groups() {
   const handleGroupClick = (groupId: string) => {
     navigate(`/group/${groupId}`);
   };
+
+  if (isFetching) {
+    return (
+      <Layout>
+        <div className="p-8 flex items-center justify-center min-h-[60vh]">
+          <div className="text-center">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+            <p className="text-muted-foreground">Loading your groups...</p>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>
@@ -322,6 +287,7 @@ export default function Groups() {
                       placeholder="e.g., Roommates, Trip to Paris"
                       className="glass-input"
                       required
+                      disabled={isLoading}
                     />
                   </div>
                   <div className="space-y-2">
@@ -331,12 +297,20 @@ export default function Groups() {
                       name="group-description"
                       placeholder="Brief description of the group"
                       className="glass-input"
+                      disabled={isLoading}
                     />
                   </div>
                 </div>
                 <DialogFooter>
                   <Button type="submit" className="w-full" disabled={isLoading}>
-                    {isLoading ? "Creating..." : "Create Group"}
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        Creating...
+                      </>
+                    ) : (
+                      "Create Group"
+                    )}
                   </Button>
                 </DialogFooter>
               </form>
@@ -405,10 +379,12 @@ export default function Groups() {
               <p className="text-muted-foreground mb-4">
                 Create your first group or join an existing one to get started
               </p>
-              <Button onClick={() => setIsCreateOpen(true)}>
-                <Plus className="h-4 w-4 mr-2" />
-                Create Group
-              </Button>
+              <div className="flex gap-3 justify-center">
+                <Button onClick={() => setIsCreateOpen(true)}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Group
+                </Button>
+              </div>
             </CardContent>
           </Card>
         )}
@@ -420,16 +396,23 @@ export default function Groups() {
             <CardDescription>Enter a group code to join an existing group</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex gap-4">
+            <div className="flex gap-4 flex-col sm:flex-row">
               <Input
                 placeholder="Enter group code"
-                className="glass-input max-w-xs"
+                className="glass-input sm:max-w-xs"
                 value={joinCode}
                 onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
                 disabled={isLoading}
               />
-              <Button onClick={handleJoinGroup} disabled={isLoading}>
-                {isLoading ? "Joining..." : "Join Group"}
+              <Button onClick={handleJoinGroup} disabled={isLoading} className="sm:w-auto">
+                {isLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Joining...
+                  </>
+                ) : (
+                  "Join Group"
+                )}
               </Button>
             </div>
           </CardContent>

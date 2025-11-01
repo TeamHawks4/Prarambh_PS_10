@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { User, DollarSign, PieChart, Edit, Save, X } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"; 
+import { User, DollarSign, PieChart, Edit, Save, X, ExternalLink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 
@@ -37,6 +37,14 @@ export default function Profile() {
   const [categoryData, setCategoryData] = useState<CategorySpending[]>([]);
   const [totalExpenses, setTotalExpenses] = useState(0);
   const { toast } = useToast();
+
+  // Color palette for pie chart
+  const colors = [
+    '#3b82f6', '#10b981', '#f59e0b', 
+    '#ef4444', '#8b5cf6', '#ec4899',
+    '#6366f1', '#f97316', '#14b8a6',
+    '#84cc16', '#06b6d4', '#f43f5e'
+  ];
 
   // Fetch user profile and data
   useEffect(() => {
@@ -109,7 +117,7 @@ export default function Profile() {
       const total = expenses?.reduce((sum, expense) => sum + (expense.amount || 0), 0) || 0;
       setTotalExpenses(total);
 
-      // Categorize expenses (you can modify this based on your expense structure)
+      // Categorize expenses
       const categories = categorizeExpenses(expenses || []);
       setCategoryData(categories);
     } catch (error: any) {
@@ -118,8 +126,6 @@ export default function Profile() {
   };
 
   const categorizeExpenses = (expenses: any[]): CategorySpending[] => {
-    // Simple categorization based on description keywords
-    // You can enhance this with actual category field in expenses table
     const categories: { [key: string]: number } = {};
     
     expenses.forEach(expense => {
@@ -136,6 +142,10 @@ export default function Profile() {
         category = "Utilities";
       } else if (description.includes('shopping') || description.includes('clothes') || description.includes('mall')) {
         category = "Shopping";
+      } else if (description.includes('grocery') || description.includes('supermarket')) {
+        category = "Groceries";
+      } else if (description.includes('travel') || description.includes('hotel') || description.includes('flight')) {
+        category = "Travel";
       }
 
       categories[category] = (categories[category] || 0) + (expense.amount || 0);
@@ -147,7 +157,7 @@ export default function Profile() {
       name,
       amount,
       percentage: total > 0 ? Math.round((amount / total) * 100) : 0
-    }));
+    })).sort((a, b) => b.amount - a.amount); // Sort by amount descending
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -229,6 +239,53 @@ export default function Profile() {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long'
+    });
+  };
+
+  // Function to generate pie chart segments
+  const renderPieChart = () => {
+    if (categoryData.length === 0) return null;
+
+    let cumulativePercentage = 0;
+
+    return categoryData.map((category, index) => {
+      const percentage = category.percentage;
+      const startAngle = (cumulativePercentage / 100) * 360;
+      const endAngle = ((cumulativePercentage + percentage) / 100) * 360;
+      
+      cumulativePercentage += percentage;
+
+      // Convert angles to radians for SVG path
+      const startRad = (startAngle - 90) * (Math.PI / 180);
+      const endRad = (endAngle - 90) * (Math.PI / 180);
+      
+      const centerX = 50;
+      const centerY = 50;
+      const radius = 40;
+      
+      const x1 = centerX + radius * Math.cos(startRad);
+      const y1 = centerY + radius * Math.sin(startRad);
+      const x2 = centerX + radius * Math.cos(endRad);
+      const y2 = centerY + radius * Math.sin(endRad);
+      
+      const largeArcFlag = percentage > 50 ? 1 : 0;
+      
+      const pathData = [
+        `M ${centerX} ${centerY}`,
+        `L ${x1} ${y1}`,
+        `A ${radius} ${radius} 0 ${largeArcFlag} 1 ${x2} ${y2}`,
+        `Z`
+      ].join(' ');
+      
+      return (
+        <path
+          key={category.name}
+          d={pathData}
+          fill={colors[index % colors.length]}
+          opacity="0.8"
+          className="hover:opacity-100 transition-opacity cursor-pointer"
+        />
+      );
     });
   };
 
@@ -397,22 +454,45 @@ export default function Profile() {
                   </CardHeader>
                   <CardContent className="space-y-6">
                     {categoryData.length > 0 ? (
-                      categoryData.map((category) => (
-                        <div key={category.name} className="space-y-2">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="font-medium">{category.name}</span>
-                            <span className="text-muted-foreground">
-                              ${category.amount.toFixed(2)} ({category.percentage}%)
-                            </span>
-                          </div>
-                          <div className="h-2 bg-muted/30 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-gradient-to-r from-primary to-accent rounded-full transition-all"
-                              style={{ width: `${category.percentage}%` }}
-                            />
+                      <div className="flex flex-col lg:flex-row gap-8 items-center">
+                        {/* Pie Chart Visualization */}
+                        <div className="relative w-64 h-64">
+                          <svg viewBox="0 0 100 100" className="w-full h-full">
+                            {renderPieChart()}
+                            <circle cx="50" cy="50" r="15" className="fill-background" />
+                          </svg>
+                          
+                          {/* Center total amount */}
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="text-center">
+                              <div className="text-2xl font-bold">
+                                ${totalExpenses.toFixed(2)}
+                              </div>
+                              <div className="text-xs text-muted-foreground">Total</div>
+                            </div>
                           </div>
                         </div>
-                      ))
+                        
+                        {/* Legend */}
+                        <div className="flex-1 space-y-4">
+                          <div className="grid grid-cols-1 gap-3">
+                            {categoryData.map((category, index) => (
+                              <div key={category.name} className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors">
+                                <div 
+                                  className="w-4 h-4 rounded-full" 
+                                  style={{ backgroundColor: colors[index % colors.length] }}
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-medium text-sm truncate">{category.name}</div>
+                                  <div className="text-xs text-muted-foreground">
+                                    ${category.amount.toFixed(2)} • {category.percentage}%
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
                     ) : (
                       <div className="text-center py-8 text-muted-foreground">
                         No expense data available. Start adding expenses to your groups to see analytics.
@@ -424,11 +504,17 @@ export default function Profile() {
                 {/* Placeholder for ML Forecast */}
                 <Card className="glass-card mt-6 border-dashed">
                   <CardHeader>
-                    <CardTitle className="text-muted-foreground">ML Forecast (Coming Soon)</CardTitle>
-                    <CardDescription>
-                      Get AI-powered predictions for next month's expenses and personalized savings suggestions
-                    </CardDescription>
+                    <CardTitle className="text-muted-foreground">ML Forecast</CardTitle>
+                    <CardDescription>Get AI-powered predictions for next month's expenses and personalized savings suggestions</CardDescription>
                   </CardHeader>
+                  <CardContent>
+                    <a href="https://adityaroy-splitifyx.streamlit.app/">
+                      <Button variant="outline" className="gap-2">
+                        <ExternalLink className="h-4 w-4" />
+                        Explore Forecast App
+                      </Button>
+                    </a>
+                  </CardContent>
                 </Card>
               </TabsContent>
             </Tabs>

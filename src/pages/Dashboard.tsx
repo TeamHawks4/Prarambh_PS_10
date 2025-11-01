@@ -2,25 +2,115 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { ArrowDown, ArrowUp, DollarSign, TrendingUp, Users, Wallet } from "lucide-react";
 import { Layout } from "@/components/Layout";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase"; // Adjust import path as needed
+
+interface Expense {
+  id: string;
+  title: string;
+  amount: number;
+  date: string;
+  payer_id: string;
+  settled: boolean; 
+  payer_name: string;
+}
+
+interface User {
+  id: string;
+  name: string;
+  email: string;
+}
+
+interface DashboardStats {
+  totalExpenses: number;
+  yourShare: number;
+  settled: number;
+  unsettled: number;
+  monthlyBudget: number | null;
+  budgetUsed: number;
+}
 
 export default function Dashboard() {
-  // Mock data - will be replaced with Supabase queries
-  const stats = {
-    totalExpenses: 2450.50,
-    yourShare: 980.25,
-    settled: 450.00,
-    unsettled: 530.25,
-    monthlyBudget: 5000,
-    budgetUsed: 2450.50,
+  const [stats, setStats] = useState<DashboardStats>({
+    totalExpenses: 0,
+    yourShare: 0,
+    settled: 0,
+    unsettled: 0,
+    monthlyBudget: 0,
+    budgetUsed: 0,
+  });
+  
+  const [recentExpenses, setRecentExpenses] = useState<Expense[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+
+      // Get current user
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Fetch all dashboard stats using the RPC function
+      const { data, error } = await supabase.rpc('get_dashboard_stats');
+      if (error) throw error;
+
+      if (data) {
+        setStats({
+          totalExpenses: data.totalExpenses,
+          yourShare: data.yourShare,
+          settled: data.settled,
+          unsettled: data.unsettled,
+          monthlyBudget: data.monthlyBudget,
+          budgetUsed: data.budgetUsed,
+        });
+        setRecentExpenses(data.recentExpenses || []);
+      }
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const budgetPercentage = (stats.budgetUsed / stats.monthlyBudget) * 100;
+  const formatRupees = (amount: number) => {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  };
 
-  const recentExpenses = [
-    { id: 1, title: "Dinner at Restaurant", amount: 120.50, date: "2024-01-15", payer: "John", settled: false },
-    { id: 2, title: "Grocery Shopping", amount: 85.20, date: "2024-01-14", payer: "You", settled: true },
-    { id: 3, title: "Movie Tickets", amount: 45.00, date: "2024-01-13", payer: "Sarah", settled: false },
-  ];
+  const budgetPercentage = (stats.monthlyBudget ?? 0) > 0 ? (stats.budgetUsed / (stats.monthlyBudget ?? 1)) * 100 : 0;
+
+  if (loading) {
+    return (
+      <Layout>
+        <div className="p-8 space-y-8">
+          <div className="animate-pulse">
+            <div className="h-8 bg-gray-200 rounded w-1/4 mb-2"></div>
+            <div className="h-4 bg-gray-200 rounded w-1/3"></div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[...Array(4)].map((_, i) => (
+              <Card key={i} className="animate-pulse">
+                <CardContent className="p-6">
+                  <div className="h-4 bg-gray-200 rounded w-1/2 mb-4"></div>
+                  <div className="h-8 bg-gray-200 rounded w-3/4"></div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>
@@ -38,7 +128,7 @@ export default function Dashboard() {
               <DollarSign className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">${stats.totalExpenses.toFixed(2)}</div>
+              <div className="text-2xl font-bold">{formatRupees(stats.totalExpenses)}</div>
               <p className="text-xs text-muted-foreground mt-1">This month</p>
             </CardContent>
           </Card>
@@ -49,8 +139,10 @@ export default function Dashboard() {
               <Wallet className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">${stats.yourShare.toFixed(2)}</div>
-              <p className="text-xs text-muted-foreground mt-1">40% of total</p>
+              <div className="text-2xl font-bold">{formatRupees(stats.yourShare)}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {stats.totalExpenses > 0 ? `${((stats.yourShare / stats.totalExpenses) * 100).toFixed(1)}% of total` : '0% of total'}
+              </p>
             </CardContent>
           </Card>
 
@@ -60,7 +152,7 @@ export default function Dashboard() {
               <ArrowDown className="h-4 w-4 text-success" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-success">${stats.settled.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-success">{formatRupees(stats.settled)}</div>
               <p className="text-xs text-muted-foreground mt-1">Paid off</p>
             </CardContent>
           </Card>
@@ -71,7 +163,7 @@ export default function Dashboard() {
               <ArrowUp className="h-4 w-4 text-warning" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-warning">${stats.unsettled.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-warning">{formatRupees(stats.unsettled)}</div>
               <p className="text-xs text-muted-foreground mt-1">To be paid</p>
             </CardContent>
           </Card>
@@ -81,17 +173,21 @@ export default function Dashboard() {
         <Card className="glass-card">
           <CardHeader>
             <CardTitle>Monthly Budget</CardTitle>
-            <CardDescription>
-              ${stats.budgetUsed.toFixed(2)} of ${stats.monthlyBudget.toFixed(2)} used
-            </CardDescription>
+            {stats.monthlyBudget && stats.monthlyBudget > 0 ? (
+              <CardDescription>
+                {formatRupees(stats.budgetUsed)} of {formatRupees(stats.monthlyBudget)} used
+              </CardDescription>
+            ) : <CardDescription>No budget set. You can set one in your profile.</CardDescription>}
           </CardHeader>
           <CardContent className="space-y-4">
-            <Progress value={budgetPercentage} className="h-3" />
+            {stats.monthlyBudget && stats.monthlyBudget > 0 && <Progress value={budgetPercentage} className="h-3" />}
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">{budgetPercentage.toFixed(1)}% spent</span>
-              <span className={budgetPercentage > 80 ? "text-warning font-medium" : "text-muted-foreground"}>
-                ${(stats.monthlyBudget - stats.budgetUsed).toFixed(2)} remaining
-              </span>
+              {stats.monthlyBudget && stats.monthlyBudget > 0 && (
+                <span className={budgetPercentage > 80 ? "text-warning font-medium" : "text-muted-foreground"}>
+                  {formatRupees(stats.monthlyBudget - stats.budgetUsed)} remaining
+                </span>
+              )}
             </div>
             {budgetPercentage > 80 && (
               <p className="text-sm text-warning">⚠️ You're approaching your monthly budget limit!</p>
@@ -107,31 +203,35 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {recentExpenses.map((expense) => (
-                <div
-                  key={expense.id}
-                  className="flex items-center justify-between p-4 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
-                >
-                  <div className="space-y-1">
-                    <p className="font-medium">{expense.title}</p>
-                    <p className="text-sm text-muted-foreground">
-                      Paid by {expense.payer} • {expense.date}
-                    </p>
+              {recentExpenses.length === 0 ? (
+                <p className="text-center text-muted-foreground py-8">No expenses found for this month</p>
+              ) : (
+                recentExpenses.map((expense) => (
+                  <div
+                    key={expense.id}
+                    className="flex items-center justify-between p-4 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
+                  >
+                    <div className="space-y-1">
+                      <p className="font-medium">{expense.title}</p>
+                      <p className="text-sm text-muted-foreground">
+                        Paid by {expense.payer_name || 'Unknown'} • {new Date(expense.date).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-bold text-lg">{formatRupees(expense.amount)}</p>
+                      <span
+                        className={`text-xs px-2 py-1 rounded-full ${
+                          expense.settled
+                            ? "bg-success/20 text-success"
+                            : "bg-warning/20 text-warning"
+                        }`}
+                      >
+                        {expense.settled ? "Settled" : "Pending"}
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="font-bold text-lg">${expense.amount.toFixed(2)}</p>
-                    <span
-                      className={`text-xs px-2 py-1 rounded-full ${
-                        expense.settled
-                          ? "bg-success/20 text-success"
-                          : "bg-warning/20 text-warning"
-                      }`}
-                    >
-                      {expense.settled ? "Settled" : "Pending"}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </CardContent>
         </Card>
